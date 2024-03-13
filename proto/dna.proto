@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package dna;
+
+message ConfigRange {
+    Range link_ppt = 1;
+    Range rtt = 2;
+    Range num_senders = 3;
+    float mean_off_duration = 4;
+    float mean_on_duration = 5;
+    uint32 generations = 6;
+    repeated uint32 window_increments = 7;
+    repeated float window_multiples = 8;
+    repeated float intersends = 9;
+    repeated MemoryRange domains = 10;
+}
+
+message Range {
+    float low = 1;
+    float high = 2;
+}
+
+message Whisker {
+    uint32 generation = 1;
+    uint32 window_increment = 2;
+    float window_multiple = 3;
+    float intersend = 4;
+    MemoryRange domain = 5;
+}
+
+message MemoryRange {
+    Memory lower = 1;
+    Memory upper = 2;
+}
+
+message Memory {
+    float recv_rate = 1;
+    float send_rate = 2;
+    float latest_delay = 3;
+    float inter_packet_delay = 4;
+}
+
+message Whiskers {
+    repeated Whisker whiskers = 1;
+}
