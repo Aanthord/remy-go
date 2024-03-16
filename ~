@@ -1,0 +1,7 @@
+module github.com/Aanthord/remy-go
+
+replace github.com/Aanthord/remy-go/proto => ./proto
+
+go 1.22.0
+
+require google.golang.org/protobuf v1.33.0 // indirect

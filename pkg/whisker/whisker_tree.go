@@ -1,26 +1,26 @@
 package whisker
 
 import (
-    "errors" // Import the errors package for error handling
-    "fmt"   // Import the fmt package for formatted I/O
+    "errors"
+    "fmt"
 
-    "github.com/Aanthord/remy-go/pkg/dna"    // Import the dna package from the remy project
-    "github.com/Aanthord/remy-go/pkg/memory" // Import the memory package from the remy project
+//    "github.com/Aanthord/remy-go/pkg/dna"
+    "github.com/Aanthord/remy-go/pkg/memory"
 )
 
 // WhiskerTree represents a tree-like structure that holds multiple whiskers
 type WhiskerTree struct {
-    Root *WhiskerNode // Pointer to the root node of the tree
+    Root *WhiskerNode
 }
 
 // WhiskerNode represents a node in the whisker tree
 type WhiskerNode struct {
-    Whisker  *Whisker      // Pointer to the Whisker associated with the node
-    Children []*WhiskerNode // Slice of child nodes
+    Whisker  *Whisker
+    Children []*WhiskerNode
 }
 
 // NewWhiskerTree is a constructor that creates a new instance of the WhiskerTree struct
-func NewWhiskerTree(config *dna.ConfigRange) *WhiskerTree {
+func NewWhiskerTree() *WhiskerTree {
     root := &WhiskerNode{
         Whisker: NewWhisker(0, 0, 1.0, 0.0, memory.NewMemoryRange(memory.MinMemory(), memory.MaxMemory())),
     }
@@ -37,7 +37,7 @@ func (wt *WhiskerTree) Insert(whisker *Whisker) error {
 
 // insert is a recursive function that inserts a new whisker into the whisker tree
 func (wt *WhiskerTree) insert(node *WhiskerNode, whisker *Whisker) error {
-    if node.Whisker.Domain.Contains(whisker.Domain) {
+    if node.Whisker.Domain.Intersects(whisker.Domain) {
         if node.Whisker.Generation >= whisker.Generation {
             return fmt.Errorf("whisker with generation %d already exists in the domain", whisker.Generation)
         }
@@ -46,7 +46,7 @@ func (wt *WhiskerTree) insert(node *WhiskerNode, whisker *Whisker) error {
     }
 
     for _, child := range node.Children {
-        if child.Whisker.Domain.Contains(whisker.Domain) {
+        if child.Whisker.Domain.Intersects(whisker.Domain) {
             return wt.insert(child, whisker)
         }
     }
@@ -67,8 +67,8 @@ func (wt *WhiskerTree) FindWhisker(m *memory.Memory) (*Whisker, error) {
 
 // findNode is a recursive function that finds the node that contains the given memory state
 func (wt *WhiskerTree) findNode(node *WhiskerNode, m *memory.Memory) (*WhiskerNode, error) {
-    if !node.Whisker.Domain.Contains(m) {
-        return nil, errors.New("memory not found in the tree")
+    if node.Whisker.Domain.Contains(m) {
+        return node, nil
     }
 
     for _, child := range node.Children {
@@ -77,7 +77,7 @@ func (wt *WhiskerTree) findNode(node *WhiskerNode, m *memory.Memory) (*WhiskerNo
         }
     }
 
-    return node, nil
+    return nil, errors.New("memory not found in the tree")
 }
 
 // String returns a string representation of the whisker tree

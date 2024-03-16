@@ -1,0 +1,271 @@
+package rat
+
+import (
+    "bytes"
+    "encoding/binary"
+    "fmt"
+    "net"
+    "sync"
+    "time"
+    "unsafe"
+
+    "github.com/Aanthord/remy-go/pkg/memory"
+    "github.com/Aanthord/remy-go/pkg/whisker"
+    "golang.org/x/sys/unix"
+)
+
+// RAT represents the Remy Augmented TCP (RAT) congestion control algorithm
+type RAT struct {
+    whiskers       *whisker.WhiskerTree // Pointer to the WhiskerTree that holds the whiskers
+    memory         *memory.Memory       // Pointer to the Memory object that stores the network state
+    packetsSent    uint                 // Number of packets sent
+    packetsReceived uint                 // Number of packets received
+    track          bool                 // Flag to enable tracking (used in the C++ implementation)
+    lastSendTime   time.Time            // Timestamp of the last packet sent
+    congestionWindow uint                 // Current congestion window size
+    intersendTime  float64              // Intersend time for the current whisker
+    flowID         uint                 // Flow ID
+    currentWhisker *whisker.Whisker     // Pointer to the currently selected Whisker
+    mu             sync.Mutex           // Mutex for synchronization
+}
+
+// NewRAT is a constructor that creates a new instance of the RAT struct
+func NewRAT(whiskers *whisker.WhiskerTree, track bool) *RAT {
+    return &RAT{
+        whiskers:      whiskers,
+        memory:        memory.NewMemory(),
+        track:         track,
+        flowID:        0,
+        currentWhisker: whiskers.Root.Whisker,
+    }
+}
+
+// Start initializes the RAT algorithm
+// It creates a TCP listener and sets the RAT algorithm as the system-wide congestion control algorithm
+func (rat *RAT) Start() error {
+    // Create a TCP listener
+    listener, err := net.Listen("tcp", ":0")
+    if err != nil {
+        return err
+    }
+    defer listener.Close()
+
+    // Get the listener's socket file descriptor
+    listenerFD, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
+    if err != nil {
+        return err
+    }
+
+    // Set the RAT algorithm as the system-wide congestion control algorithm
+    if err := SetRATAlgorithmSystemWide(listenerFD); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+// Send sends a packet from the sender to the receiver
+func (rat *RAT) Send(id int, next *net.TCPConn, seq int, packetsSentCap uint) {
+    rat.mu.Lock()
+    defer rat.mu.Unlock()
+
+    // Assertion to ensure that the number of packets sent is greater than or equal to the number of packets received
+    assertCondition(rat.packetsSent >= rat.packetsReceived, "Number of packets sent should be greater than or equal to the number of packets received")
+
+    if rat.congestionWindow == 0 {
+        // If the congestion window is zero, initialize the current whisker, congestion window, and intersend time
+        rat.currentWhisker = rat.whiskers.Root.Whisker
+        rat.congestionWindow = rat.currentWhisker.Window(0)
+        rat.intersendTime = rat.currentWhisker.Intersend
+    }
+
+    if (rat.packetsSent < rat.packetsReceived+rat.congestionWindow) &&
+        (time.Since(rat.lastSendTime) >= time.Duration(rat.intersendTime*float64(time.Second))) {
+
+        // Check if it's time to send a packet based on the congestion window and intersend time
+
+        // Have we reached the end of the flow for now?
+        if rat.packetsSent >= packetsSentCap {
+            return
+        }
+
+        // Create a new Packet struct and populate its fields
+        packet := &Packet{
+            SeqNo:  seq,
+            ID:     id,
+            FlowID: rat.flowID,
+            Sent:   time.Now(),
+        }
+        rat.packetsSent++
+        rat.memory.UpdateSentPacket(packet) // Update the memory state to reflect the packet sent
+        if err := SendPacket(next, packet); err != nil {
+            fmt.Println("Error sending packet:", err)
+            return
+        }
+        rat.lastSendTime = time.Now() // Update the last send time
+    }
+}
+
+// ReceivePackets receives a slice of packets and updates the RAT state
+func (rat *RAT) ReceivePackets(packets []*Packet) {
+    rat.mu.Lock()
+    defer rat.mu.Unlock()
+
+    rat.packetsReceived += uint(len(packets)) // Update the number of packets received
+
+    for _, packet := range packets {
+        if packet.FlowID == rat.flowID {
+            rtt := time.Since(packet.Sent) // Calculate the round-trip time (RTT)
+            rat.memory.UpdateReceivedPackets(packets, rat.flowID) // Update the memory state with the received packet
+            whisker, err := rat.whiskers.FindWhisker(rat.memory)
+            if err != nil {
+                fmt.Println("Error finding whisker:", err)
+                continue
+            }
+            rat.updateState(rtt.Seconds(), packet.SeqNo, whisker) // Update the RAT state based on the received packet
+        }
+    }
+}
+
+// updateState updates the RAT state based on the received packet
+func (rat *RAT) updateState(rtt float64, seq int, currentWhisker *whisker.Whisker) {
+    rat.memory.UpdateRTT(rtt) // Update the memory state with the RTT
+    rat.currentWhisker = currentWhisker
+    rat.congestionWindow = rat.currentWhisker.Window(rat.congestionWindow) // Update the congestion window based on the current whisker
+    rat.intersendTime = rat.currentWhisker.Intersend // Update the intersend time based on the current whisker
+    rat.flowID++ // Increment the flow ID
+    if rat.flowID == 0 {
+        rat.flowID = 1 // Ensure that the flow ID is never zero
+    }
+}
+
+// NextEventTime returns the time of the next event
+func (rat *RAT) NextEventTime() time.Time {
+    nextSendTime := rat.lastSendTime.Add(time.Duration(rat.intersendTime * float64(time.Second)))
+    return nextSendTime
+}
+
+// PacketsSent returns the number of packets sent
+func (rat *RAT) PacketsSent() uint {
+    return rat.packetsSent
+}
+
+// Whiskers returns the WhiskerTree
+func (rat *RAT) Whiskers() *whisker.WhiskerTree {
+    return rat.whiskers
+}
+
+// Packet represents a network packet
+type Packet struct {
+    SeqNo    int        // Sequence number
+    ID       int        // Sender ID
+    FlowID   uint       // Flow ID
+    Sent     time.Time  // Timestamp when the packet was sent
+    Received time.Time  // Timestamp when the packet was received
+}
+
+// SendPacket sends a packet over the network
+func SendPacket(conn *net.TCPConn, packet *Packet) error {
+    data, err := encodePacket(packet)
+    if err != nil {
+        return err
+    }
+    _, err = conn.Write(data)
+    if err != nil {
+        return err
+    }
+    return nil
+}
+
+// ReceivePacket receives a packet from the network
+func ReceivePacket(conn *net.TCPConn) (*Packet, error) {
+    buffer := make([]byte, 1024) // Placeholder buffer size
+    n, err := conn.Read(buffer)
+    if err != nil {
+        return nil, err
+    }
+    packet, err := decodePacket(buffer[:n])
+    if err != nil {
+        return nil, err
+    }
+    packet.Received = time.Now() // Set the received timestamp for the packet
+    return packet, nil
+}
+
+// encodePacket encodes a packet into a byte slice
+func encodePacket(packet *Packet) ([]byte, error) {
+    buf := new(bytes.Buffer)
+
+    // Encode the sequence number
+    if err := binary.Write(buf, binary.BigEndian, int32(packet.SeqNo)); err != nil {
+        return nil, err
+    }
+
+    // Encode the sender ID
+    if err := binary.Write(buf, binary.BigEndian, int32(packet.ID)); err != nil {
+        return nil, err
+    }
+
+    // Encode the flow ID
+    if err := binary.Write(buf, binary.BigEndian, packet.FlowID); err != nil {
+        return nil, err
+    }
+
+    // Encode the sent timestamp
+    if err := binary.Write(buf, binary.BigEndian, packet.Sent.UnixNano()); err != nil {
+        return nil, err
+    }
+
+    return buf.Bytes(), nil
+}
+
+// decodePacket decodes a packet from a byte slice
+func decodePacket(buffer []byte) (*Packet, error) {
+    buf := bytes.NewReader(buffer)
+
+    packet := &Packet{}
+
+    // Decode the sequence number
+    var seqNo int32
+    if err := binary.Read(buf, binary.BigEndian, &seqNo); err != nil {
+        return nil, err
+    }
+    packet.SeqNo = int(seqNo)
+
+    // Decode the sender ID
+    var id int32
+    if err := binary.Read(buf, binary.BigEndian, &id); err != nil {
+        return nil, err
+    }
+    packet.ID = int(id)
+
+    // Decode the flow ID
+    if err := binary.Read(buf, binary.BigEndian, &packet.FlowID); err != nil {
+        return nil, err
+    }
+
+    // Decode the sent timestamp
+    var sent int64
+    if err := binary.Read(buf, binary.BigEndian, &sent); err != nil {
+        return nil, err
+    }
+    packet.Sent = time.Unix(0, sent)
+
+    return packet, nil
+}
+
+// assertCondition is a function for assertions
+func assertCondition(condition bool, message string) {
+    if !condition {
+        panic(message)
+    }
+}
+
+// SetRATAlgorithmSystemWide sets the RAT congestion control algorithm as the system-wide default
+func SetRATAlgorithmSystemWide(sockFD int) error {
+    _, _, err := unix.Syscall(unix.SYS_SETSOCKOPT, uintptr(sockFD), uintptr(unix.SOL_TCP), uintptr(unix.TCP_CONGESTION), uintptr(unsafe.Pointer(&[]byte("remy\x00")[0])), uintptr(len("remy")))
+    if err != unix.Errno(0) {
+        return fmt.Errorf("failed to set RAT congestion control algorithm: %v", err)
+    }
+    return nil
+}

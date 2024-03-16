@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package dna;
 
+// Specify the Go package where the generated code will be placed.
+option go_package = "./";
+
 message ConfigRange {
     Range link_ppt = 1;
     Range rtt = 2;

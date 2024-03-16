@@ -1,0 +1,122 @@
+package memory
+
+import (
+    "math"
+
+    "github.com/Aanthord/remy-go/pkg/dna"
+)
+
+// Define DataType as a type alias for float64
+type DataType float64
+
+// Define the Memory struct
+type Memory struct {
+    RecvRate         DataType // Receive rate
+    SendRate         DataType // Send rate
+    LatestDelay      DataType // Latest observed delay
+    InterPacketDelay DataType // Inter-packet delay
+}
+
+
+// Intersects checks if two MemoryRange instances intersect
+func (mr *MemoryRange) Intersects(other *MemoryRange) bool {
+    return (mr.Lower.RecvRate <= other.Upper.RecvRate && mr.Upper.RecvRate >= other.Lower.RecvRate) &&
+        (mr.Lower.SendRate <= other.Upper.SendRate && mr.Upper.SendRate >= other.Lower.SendRate) &&
+        (mr.Lower.LatestDelay <= other.Upper.LatestDelay && mr.Upper.LatestDelay >= other.Lower.LatestDelay) &&
+        (mr.Lower.InterPacketDelay <= other.Upper.InterPacketDelay && mr.Upper.InterPacketDelay >= other.Lower.InterPacketDelay)
+}
+
+// Constructor function for creating a new Memory instance
+func NewMemory() *Memory {
+    return &Memory{}
+}
+
+// Method to update the fields of Memory
+func (m *Memory) Update(recvRate, sendRate, latestDelay, interPacketDelay DataType) {
+    m.RecvRate = recvRate
+    m.SendRate = sendRate
+    m.LatestDelay = latestDelay
+    m.InterPacketDelay = interPacketDelay
+}
+
+// Getter method for the RecvRate field
+func (m *Memory) GetRecvRate() DataType {
+    return m.RecvRate
+}
+
+// Getter method for the SendRate field
+func (m *Memory) GetSendRate() DataType {
+    return m.SendRate
+}
+
+// Getter method for the LatestDelay field
+func (m *Memory) GetLatestDelay() DataType {
+    return m.LatestDelay
+}
+
+// Getter method for the InterPacketDelay field
+func (m *Memory) GetInterPacketDelay() DataType {
+    return m.InterPacketDelay
+}
+
+// MemoryRange represents a range of memory values
+type MemoryRange struct {
+    Lower *Memory
+    Upper *Memory
+}
+
+// NewMemoryRange creates a new instance of MemoryRange
+func NewMemoryRange(lower, upper *Memory) *MemoryRange {
+    return &MemoryRange{
+        Lower: lower,
+        Upper: upper,
+    }
+}
+
+// MinMemory returns the minimum possible memory values
+func MinMemory() *Memory {
+    return &Memory{
+        RecvRate:         0,
+        SendRate:         0,
+        LatestDelay:      0,
+        InterPacketDelay: 0,
+    }
+}
+
+// MaxMemory returns the maximum possible memory values
+func MaxMemory() *Memory {
+    return &Memory{
+        RecvRate:         DataType(math.MaxFloat64),
+        SendRate:         DataType(math.MaxFloat64),
+        LatestDelay:      DataType(math.MaxFloat64),
+        InterPacketDelay: DataType(math.MaxFloat64),
+    }
+}
+
+// Contains checks if a Memory value is within the MemoryRange
+func (mr *MemoryRange) Contains(m *Memory) bool {
+    return (m.RecvRate >= mr.Lower.RecvRate && m.RecvRate <= mr.Upper.RecvRate) &&
+        (m.SendRate >= mr.Lower.SendRate && m.SendRate <= mr.Upper.SendRate) &&
+        (m.LatestDelay >= mr.Lower.LatestDelay && m.LatestDelay <= mr.Upper.LatestDelay) &&
+        (m.InterPacketDelay >= mr.Lower.InterPacketDelay && m.InterPacketDelay <= mr.Upper.InterPacketDelay)
+}
+
+// FromDNAMemory converts a dna.Memory to a memory.Memory.
+func FromDNAMemory(dnaMem *dna.Memory) *Memory {
+    return &Memory{
+        RecvRate:         DataType(dnaMem.RecvRate),
+        SendRate:         DataType(dnaMem.SendRate),
+        LatestDelay:      DataType(dnaMem.LatestDelay),
+        InterPacketDelay: DataType(dnaMem.InterPacketDelay),
+    }
+}
+
+// ToDNAMemory converts a memory.Memory to a dna.Memory.
+func (m *Memory) ToDNAMemory() *dna.Memory {
+    return &dna.Memory{
+        RecvRate:         float32(m.RecvRate),
+        SendRate:         float32(m.SendRate),
+        LatestDelay:      float32(m.LatestDelay),
+        InterPacketDelay: float32(m.InterPacketDelay),
+    }
+}
